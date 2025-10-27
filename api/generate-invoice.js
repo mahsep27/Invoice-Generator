@@ -2,6 +2,9 @@
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
 
+// Configure chromium for Vercel
+chromium.setGraphicsMode = false;
+
 export default async function handler(req, res) {
   // Enable CORS for Airtable
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,6 +20,8 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  let browser = null;
 
   try {
     const { clientName, amount, invoiceDate, services, companyName } = req.body;
@@ -306,20 +311,36 @@ export default async function handler(req, res) {
       </html>
     `;
 
-    console.log('Launching browser...');
+    console.log('Launching browser with optimized settings...');
 
-    // Launch Puppeteer with Chromium
-    const browser = await puppeteer.launch({
-      args: [...chromium.args, '--hide-scrollbars', '--disable-web-security'],
+    // Launch Puppeteer with optimized Chromium settings for Vercel
+    browser = await puppeteer.launch({
+      args: [
+        ...chromium.args,
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--disable-gpu'
+      ],
       defaultViewport: chromium.defaultViewport,
       executablePath: await chromium.executablePath(),
       headless: chromium.headless,
+      ignoreHTTPSErrors: true,
     });
 
     console.log('Browser launched successfully');
 
     const page = await browser.newPage();
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    
+    // Set content with timeout
+    await page.setContent(htmlContent, { 
+      waitUntil: ['domcontentloaded', 'networkidle0'],
+      timeout: 30000 
+    });
 
     console.log('Generating PDF...');
 
@@ -333,9 +354,11 @@ export default async function handler(req, res) {
         bottom: '0px',
         left: '0px',
       },
+      timeout: 30000
     });
 
     await browser.close();
+    browser = null;
 
     console.log('PDF generated successfully');
 
@@ -353,6 +376,16 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Error generating invoice:', error);
+    
+    // Make sure browser is closed even if there's an error
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (closeError) {
+        console.error('Error closing browser:', closeError);
+      }
+    }
+    
     return res.status(500).json({ 
       error: 'Failed to generate invoice',
       details: error.message 
