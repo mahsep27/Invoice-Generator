@@ -1,22 +1,13 @@
-// ========================================
-// VERCEL API ENDPOINT
-// ========================================
-// File: /api/generate-invoice.js
-// Handles: Airtable → Apps Script → Airtable flow (Generate & Delete)
-
 export default async function handler(req, res) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Handle preflight request
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  // Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ 
       success: false,
@@ -29,13 +20,11 @@ export default async function handler(req, res) {
   console.log('==========================================');
   
   try {
-    // Get configuration from environment variables
     const GOOGLE_APPS_SCRIPT_URL = process.env.GOOGLE_APPS_SCRIPT_URL;
     const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
     const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
     const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Invoices';
 
-    // Validate environment variables
     if (!GOOGLE_APPS_SCRIPT_URL) {
       throw new Error('GOOGLE_APPS_SCRIPT_URL environment variable is not set');
     }
@@ -47,7 +36,7 @@ export default async function handler(req, res) {
     }
 
     const requestData = req.body;
-    const action = requestData.action || 'generate'; // Default to 'generate'
+    const action = requestData.action || 'generate';
 
     console.log('🎬 Action:', action);
 
@@ -66,7 +55,6 @@ export default async function handler(req, res) {
       console.log('   File ID:', fileId);
       console.log('📤 Forwarding delete request to Apps Script...');
 
-      // Send delete request to Apps Script
       const appsScriptResponse = await fetch(GOOGLE_APPS_SCRIPT_URL, {
         method: 'POST',
         headers: {
@@ -120,13 +108,11 @@ export default async function handler(req, res) {
     console.log('📤 STEP 1: Forwarding to Google Apps Script...');
     console.log('   URL:', GOOGLE_APPS_SCRIPT_URL);
     
-    // Add action to the request
     const appsScriptPayload = {
       ...requestData,
       action: 'generate'
     };
 
-    // STEP 1: Send data to Google Apps Script
     const appsScriptResponse = await fetch(GOOGLE_APPS_SCRIPT_URL, {
       method: 'POST',
       headers: {
@@ -152,7 +138,6 @@ export default async function handler(req, res) {
       throw new Error('Apps Script did not return fileName');
     }
 
-    // Check if we have Drive URL (new method)
     if (!appsScriptResult.fileUrl || !appsScriptResult.fileId) {
       throw new Error('Apps Script did not return fileUrl and fileId. Make sure you updated the Apps Script code.');
     }
@@ -162,7 +147,7 @@ export default async function handler(req, res) {
     console.log('   File ID:', appsScriptResult.fileId);
     console.log('   File URL:', appsScriptResult.fileUrl);
 
-    // STEP 2: Upload PDF to Airtable using Drive URL
+    // STEP 2: Upload PDF to Airtable (WITHOUT Drive File ID)
     console.log('📤 STEP 2: Uploading PDF to Airtable...');
     console.log('   Base ID:', AIRTABLE_BASE_ID);
     console.log('   Table:', tableName);
@@ -170,12 +155,12 @@ export default async function handler(req, res) {
 
     const airtableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`;
     
+    // ✅ ONLY upload the PDF, NOT the Drive File ID
     const updateFields = {
       'Invoice PDF': [{
         url: appsScriptResult.fileUrl,
         filename: appsScriptResult.fileName
-      }],
-      'Drive File ID': appsScriptResult.fileId // Store fileId for later deletion
+      }]
     };
 
     const airtableUploadResponse = await fetch(airtableUrl, {
@@ -198,17 +183,15 @@ export default async function handler(req, res) {
     const airtableResult = await airtableUploadResponse.json();
     
     console.log('✅ PDF UPLOADED TO AIRTABLE SUCCESSFULLY!');
-    console.log('✅ Drive File ID stored in Airtable for cleanup');
     console.log('==========================================');
 
-    // Return success response
     return res.status(200).json({
       success: true,
       message: 'Invoice generated and uploaded to Airtable successfully',
       fileName: appsScriptResult.fileName,
       recordId: recordId,
       airtableRecordId: airtableResult.id,
-      fileId: appsScriptResult.fileId,
+      fileId: appsScriptResult.fileId, // Return fileId for deletion
       fileUrl: appsScriptResult.fileUrl
     });
 
