@@ -1,14 +1,9 @@
 {
-  "name": "invoice-generator-vercel",
+  "name": "vercel-airtable-invoice-api",
   "version": "1.0.0",
-  "description": "Invoice PDF generator - Airtable to Google Apps Script bridge",
+  "private": true,
   "type": "module",
-  "keywords": [
-    "invoice",
-    "pdf",
-    "airtable",
-    "google-apps-script"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  "engines": {
+    "node": ">=18"
+  }
 }
