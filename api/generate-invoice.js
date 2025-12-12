@@ -48,8 +48,11 @@ export default async function handler(req, res) {
 
     const invoiceData = req.body;
     const recordId = invoiceData.recordId;
+    // ✅ Use table name from request if provided, otherwise fall back to env variable
+    const tableName = invoiceData.tableName || AIRTABLE_TABLE_NAME;
 
     console.log('📦 Invoice Data:', JSON.stringify(invoiceData, null, 2));
+    console.log('📋 Table Name:', tableName);
 
     if (!recordId) {
       throw new Error('Record ID is required in the request body');
@@ -74,34 +77,57 @@ export default async function handler(req, res) {
 
     const appsScriptResult = await appsScriptResponse.json();
 
-    // ✅ FIX: Log the full response for debugging
     console.log('📋 Apps Script Response:', JSON.stringify(appsScriptResult, null, 2));
 
-    // ✅ FIX: Check success first
     if (!appsScriptResult.success) {
       throw new Error(`Apps Script Error: ${appsScriptResult.error || 'Unknown error from Apps Script'}`);
-    }
-
-    // ✅ FIX: Validate pdfBase64 exists before accessing .length
-    if (!appsScriptResult.pdfBase64) {
-      throw new Error('Apps Script did not return PDF data. Response fields: ' + Object.keys(appsScriptResult).join(', '));
     }
 
     if (!appsScriptResult.fileName) {
       throw new Error('Apps Script did not return fileName');
     }
 
-    console.log('✅ PDF Generated Successfully');
-    console.log('   File Name:', appsScriptResult.fileName);
-    console.log('   PDF Size:', appsScriptResult.pdfBase64.length, 'characters');
+    // ✅ UPDATED: Handle both base64 and Drive URL responses
+    let pdfData;
+    let uploadMethod;
+
+    if (appsScriptResult.pdfBase64) {
+      // Method 1: Base64 data (original approach)
+      console.log('✅ PDF Generated Successfully (Base64)');
+      console.log('   File Name:', appsScriptResult.fileName);
+      console.log('   PDF Size:', appsScriptResult.pdfBase64.length, 'characters');
+      
+      pdfData = {
+        filename: appsScriptResult.fileName,
+        url: `data:application/pdf;base64,${appsScriptResult.pdfBase64}`
+      };
+      uploadMethod = 'base64';
+
+    } else if (appsScriptResult.fileUrl) {
+      // Method 2: Google Drive URL
+      console.log('✅ PDF Generated Successfully (Drive Link)');
+      console.log('   File Name:', appsScriptResult.fileName);
+      console.log('   File ID:', appsScriptResult.fileId);
+      console.log('   File URL:', appsScriptResult.fileUrl);
+      
+      pdfData = {
+        filename: appsScriptResult.fileName,
+        url: appsScriptResult.fileUrl
+      };
+      uploadMethod = 'drive_url';
+
+    } else {
+      throw new Error('Apps Script did not return PDF data (neither pdfBase64 nor fileUrl). Response fields: ' + Object.keys(appsScriptResult).join(', '));
+    }
 
     console.log('📤 STEP 2: Uploading PDF to Airtable...');
     console.log('   Base ID:', AIRTABLE_BASE_ID);
-    console.log('   Table:', AIRTABLE_TABLE_NAME);
+    console.log('   Table:', tableName);
     console.log('   Record ID:', recordId);
+    console.log('   Upload Method:', uploadMethod);
 
     // STEP 2: Upload PDF to Airtable
-    const airtableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}/${recordId}`;
+    const airtableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`;
     
     const airtableUploadResponse = await fetch(airtableUrl, {
       method: 'PATCH',
@@ -111,12 +137,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         fields: {
-          'Invoice PDF': [
-            {
-              filename: appsScriptResult.fileName,
-              url: `data:application/pdf;base64,${appsScriptResult.pdfBase64}`
-            }
-          ]
+          'Invoice PDF': [pdfData]
         }
       })
     });
@@ -138,7 +159,10 @@ export default async function handler(req, res) {
       message: 'Invoice generated and uploaded to Airtable successfully',
       fileName: appsScriptResult.fileName,
       recordId: recordId,
-      airtableRecordId: airtableResult.id
+      airtableRecordId: airtableResult.id,
+      uploadMethod: uploadMethod,
+      fileId: appsScriptResult.fileId,
+      fileUrl: appsScriptResult.fileUrl
     });
 
   } catch (error) {
