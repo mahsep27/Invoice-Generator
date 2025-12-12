@@ -1,152 +1,143 @@
-// api/generate-invoice.js
-// Deploy this to Vercel
+// ========================================
+// VERCEL API ENDPOINT
+// ========================================
+// File: /api/generate-invoice.js
+// Handles: Airtable → Apps Script → Airtable flow
 
 export default async function handler(req, res) {
+  // Enable CORS
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // Handle preflight request
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   // Only allow POST requests
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  try {
-    console.log('📨 Received request from Airtable');
-    
-    const { recordId, tableId, baseId } = req.body;
-    
-    if (!recordId || !tableId || !baseId) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: recordId, tableId, or baseId' 
-      });
-    }
-
-    // Step 1: Fetch record data from Airtable
-    console.log('🔍 Fetching record from Airtable...');
-    const recordData = await fetchAirtableRecord(baseId, tableId, recordId);
-    
-    // Step 2: Send to Google Apps Script to generate PDF
-    console.log('📄 Generating PDF via Apps Script...');
-    const pdfBase64 = await generatePDFFromAppsScript(recordData);
-    
-    // Step 3: Upload PDF back to Airtable
-    console.log('⬆️ Uploading PDF to Airtable...');
-    const attachmentUrl = await uploadPDFToAirtable(
-      baseId, 
-      tableId, 
-      recordId, 
-      pdfBase64,
-      recordData
-    );
-    
-    console.log('✅ Success! PDF uploaded to Airtable');
-    
-    return res.status(200).json({
-      success: true,
-      message: 'Invoice generated and uploaded to Airtable',
-      attachmentUrl
-    });
-
-  } catch (error) {
-    console.error('❌ Error:', error);
-    return res.status(500).json({
+    return res.status(405).json({ 
       success: false,
-      error: error.message
+      error: 'Method not allowed. Use POST.' 
     });
   }
-}
 
-// ========================================
-// FETCH RECORD FROM AIRTABLE
-// ========================================
-async function fetchAirtableRecord(baseId, tableId, recordId) {
-  const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN;
+  console.log('==========================================');
+  console.log('📨 RECEIVED REQUEST FROM AIRTABLE');
+  console.log('==========================================');
   
-  const response = await fetch(
-    `https://api.airtable.com/v0/${baseId}/${tableId}/${recordId}`,
-    {
-      headers: {
-        'Authorization': `Bearer ${AIRTABLE_TOKEN}`
-      }
+  try {
+    // Get configuration from environment variables
+    const GOOGLE_APPS_SCRIPT_URL = process.env.GOOGLE_APPS_SCRIPT_URL;
+    const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
+    const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
+    const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || 'Invoices';
+
+    // Validate environment variables
+    if (!GOOGLE_APPS_SCRIPT_URL) {
+      throw new Error('GOOGLE_APPS_SCRIPT_URL environment variable is not set');
     }
-  );
+    if (!AIRTABLE_API_KEY) {
+      throw new Error('AIRTABLE_API_KEY environment variable is not set');
+    }
+    if (!AIRTABLE_BASE_ID) {
+      throw new Error('AIRTABLE_BASE_ID environment variable is not set');
+    }
 
-  if (!response.ok) {
-    throw new Error(`Airtable fetch failed: ${response.statusText}`);
-  }
+    const invoiceData = req.body;
+    const recordId = invoiceData.recordId;
 
-  const data = await response.json();
-  return data.fields;
-}
+    console.log('📦 Invoice Data:', JSON.stringify(invoiceData, null, 2));
 
-// ========================================
-// GENERATE PDF VIA GOOGLE APPS SCRIPT
-// ========================================
-async function generatePDFFromAppsScript(recordData) {
-  const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-  
-  const response = await fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    redirect: 'follow', // Important: follow redirects
-    body: JSON.stringify(recordData)
-  });
+    if (!recordId) {
+      throw new Error('Record ID is required in the request body');
+    }
 
-  if (!response.ok) {
-    throw new Error(`Apps Script failed: ${response.statusText}`);
-  }
+    console.log('📤 STEP 1: Forwarding to Google Apps Script...');
+    console.log('   URL:', GOOGLE_APPS_SCRIPT_URL);
+    
+    // STEP 1: Send data to Google Apps Script
+    const appsScriptResponse = await fetch(GOOGLE_APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(invoiceData)
+    });
 
-  const result = await response.json();
-  
-  if (!result.success || !result.pdfBase64) {
-    throw new Error('Apps Script did not return PDF');
-  }
+    if (!appsScriptResponse.ok) {
+      const errorText = await appsScriptResponse.text();
+      throw new Error(`Apps Script request failed: ${appsScriptResponse.status} - ${errorText}`);
+    }
 
-  return result.pdfBase64;
-}
+    const appsScriptResult = await appsScriptResponse.json();
 
-// ========================================
-// UPLOAD PDF TO AIRTABLE
-// ========================================
-async function uploadPDFToAirtable(baseId, tableId, recordId, pdfBase64, recordData) {
-  const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN;
-  
-  const fileName = `Invoice_${recordData['Invoice Number']}_${recordData['Inquiry Name'].replace(/\s+/g, '_')}.pdf`;
-  
-  // Convert base64 to buffer
-  const pdfBuffer = Buffer.from(pdfBase64, 'base64');
-  
-  // Step 1: Upload to Airtable attachments
-  const formData = new FormData();
-  const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
-  formData.append('file', blob, fileName);
-  
-  // Step 2: Update the record with the attachment
-  const updateResponse = await fetch(
-    `https://api.airtable.com/v0/${baseId}/${tableId}/${recordId}`,
-    {
+    if (!appsScriptResult.success) {
+      throw new Error(`Apps Script Error: ${appsScriptResult.error}`);
+    }
+
+    console.log('✅ PDF Generated Successfully');
+    console.log('   File Name:', appsScriptResult.fileName);
+    console.log('   PDF Size:', appsScriptResult.pdfBase64.length, 'characters');
+
+    console.log('📤 STEP 2: Uploading PDF to Airtable...');
+    console.log('   Base ID:', AIRTABLE_BASE_ID);
+    console.log('   Table:', AIRTABLE_TABLE_NAME);
+    console.log('   Record ID:', recordId);
+
+    // STEP 2: Upload PDF to Airtable
+    const airtableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}/${recordId}`;
+    
+    const airtableUploadResponse = await fetch(airtableUrl, {
       method: 'PATCH',
       headers: {
-        'Authorization': `Bearer ${AIRTABLE_TOKEN}`,
-        'Content-Type': 'application/json'
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         fields: {
           'Invoice PDF': [
             {
-              filename: fileName,
-              url: `data:application/pdf;base64,${pdfBase64}`
+              filename: appsScriptResult.fileName,
+              url: `data:application/pdf;base64,${appsScriptResult.pdfBase64}`
             }
           ]
         }
       })
+    });
+
+    if (!airtableUploadResponse.ok) {
+      const errorText = await airtableUploadResponse.text();
+      console.error('❌ Airtable Error Response:', errorText);
+      throw new Error(`Airtable upload failed: ${airtableUploadResponse.status} - ${errorText}`);
     }
-  );
 
-  if (!updateResponse.ok) {
-    const errorText = await updateResponse.text();
-    throw new Error(`Failed to upload PDF to Airtable: ${errorText}`);
+    const airtableResult = await airtableUploadResponse.json();
+    
+    console.log('✅ PDF UPLOADED TO AIRTABLE SUCCESSFULLY!');
+    console.log('==========================================');
+
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: 'Invoice generated and uploaded to Airtable successfully',
+      fileName: appsScriptResult.fileName,
+      recordId: recordId,
+      airtableRecordId: airtableResult.id
+    });
+
+  } catch (error) {
+    console.error('==========================================');
+    console.error('❌ ERROR:', error.message);
+    console.error('Stack:', error.stack);
+    console.error('==========================================');
+    
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
-
-  const result = await updateResponse.json();
-  return result.fields['Invoice PDF'][0].url;
 }
