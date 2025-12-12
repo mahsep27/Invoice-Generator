@@ -2,7 +2,7 @@
 // VERCEL API ENDPOINT
 // ========================================
 // File: /api/generate-invoice.js
-// Handles: Airtable → Apps Script → Airtable flow
+// Handles: Airtable → Apps Script → Airtable flow (Generate & Delete)
 
 export default async function handler(req, res) {
   // Enable CORS
@@ -46,28 +46,93 @@ export default async function handler(req, res) {
       throw new Error('AIRTABLE_BASE_ID environment variable is not set');
     }
 
-    const invoiceData = req.body;
-    const recordId = invoiceData.recordId;
-    // ✅ Use table name from request if provided, otherwise fall back to env variable
-    const tableName = invoiceData.tableName || AIRTABLE_TABLE_NAME;
+    const requestData = req.body;
+    const action = requestData.action || 'generate'; // Default to 'generate'
 
-    console.log('📦 Invoice Data:', JSON.stringify(invoiceData, null, 2));
+    console.log('🎬 Action:', action);
+
+    // ========================================
+    // HANDLE DELETE ACTION
+    // ========================================
+    if (action === 'delete') {
+      console.log('🗑️ DELETE ACTION REQUESTED');
+      
+      const fileId = requestData.fileId;
+      
+      if (!fileId) {
+        throw new Error('fileId is required for delete action');
+      }
+
+      console.log('   File ID:', fileId);
+      console.log('📤 Forwarding delete request to Apps Script...');
+
+      // Send delete request to Apps Script
+      const appsScriptResponse = await fetch(GOOGLE_APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'delete',
+          fileId: fileId
+        })
+      });
+
+      if (!appsScriptResponse.ok) {
+        const errorText = await appsScriptResponse.text();
+        throw new Error(`Apps Script delete request failed: ${appsScriptResponse.status} - ${errorText}`);
+      }
+
+      const deleteResult = await appsScriptResponse.json();
+
+      console.log('📋 Delete Result:', JSON.stringify(deleteResult, null, 2));
+
+      if (deleteResult.success) {
+        console.log('✅ FILE DELETED SUCCESSFULLY FROM DRIVE');
+        console.log('==========================================');
+        
+        return res.status(200).json({
+          success: true,
+          message: 'File deleted from Google Drive successfully',
+          fileName: deleteResult.fileName,
+          fileId: fileId
+        });
+      } else {
+        throw new Error(`Delete failed: ${deleteResult.error || 'Unknown error'}`);
+      }
+    }
+
+    // ========================================
+    // HANDLE GENERATE ACTION (DEFAULT)
+    // ========================================
+    console.log('📄 GENERATE ACTION REQUESTED');
+    
+    const recordId = requestData.recordId;
+    const tableName = requestData.tableName || AIRTABLE_TABLE_NAME;
+
+    console.log('📦 Invoice Data:', JSON.stringify(requestData, null, 2));
     console.log('📋 Table Name:', tableName);
 
     if (!recordId) {
-      throw new Error('Record ID is required in the request body');
+      throw new Error('recordId is required in the request body');
     }
 
     console.log('📤 STEP 1: Forwarding to Google Apps Script...');
     console.log('   URL:', GOOGLE_APPS_SCRIPT_URL);
     
+    // Add action to the request
+    const appsScriptPayload = {
+      ...requestData,
+      action: 'generate'
+    };
+
     // STEP 1: Send data to Google Apps Script
     const appsScriptResponse = await fetch(GOOGLE_APPS_SCRIPT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(invoiceData)
+      body: JSON.stringify(appsScriptPayload)
     });
 
     if (!appsScriptResponse.ok) {
@@ -87,48 +152,32 @@ export default async function handler(req, res) {
       throw new Error('Apps Script did not return fileName');
     }
 
-    // ✅ UPDATED: Handle both base64 and Drive URL responses
-    let pdfData;
-    let uploadMethod;
-
-    if (appsScriptResult.pdfBase64) {
-      // Method 1: Base64 data (original approach)
-      console.log('✅ PDF Generated Successfully (Base64)');
-      console.log('   File Name:', appsScriptResult.fileName);
-      console.log('   PDF Size:', appsScriptResult.pdfBase64.length, 'characters');
-      
-      pdfData = {
-        filename: appsScriptResult.fileName,
-        url: `data:application/pdf;base64,${appsScriptResult.pdfBase64}`
-      };
-      uploadMethod = 'base64';
-
-    } else if (appsScriptResult.fileUrl) {
-      // Method 2: Google Drive URL
-      console.log('✅ PDF Generated Successfully (Drive Link)');
-      console.log('   File Name:', appsScriptResult.fileName);
-      console.log('   File ID:', appsScriptResult.fileId);
-      console.log('   File URL:', appsScriptResult.fileUrl);
-      
-      pdfData = {
-        filename: appsScriptResult.fileName,
-        url: appsScriptResult.fileUrl
-      };
-      uploadMethod = 'drive_url';
-
-    } else {
-      throw new Error('Apps Script did not return PDF data (neither pdfBase64 nor fileUrl). Response fields: ' + Object.keys(appsScriptResult).join(', '));
+    // Check if we have Drive URL (new method)
+    if (!appsScriptResult.fileUrl || !appsScriptResult.fileId) {
+      throw new Error('Apps Script did not return fileUrl and fileId. Make sure you updated the Apps Script code.');
     }
 
+    console.log('✅ PDF Generated Successfully (Drive Link)');
+    console.log('   File Name:', appsScriptResult.fileName);
+    console.log('   File ID:', appsScriptResult.fileId);
+    console.log('   File URL:', appsScriptResult.fileUrl);
+
+    // STEP 2: Upload PDF to Airtable using Drive URL
     console.log('📤 STEP 2: Uploading PDF to Airtable...');
     console.log('   Base ID:', AIRTABLE_BASE_ID);
     console.log('   Table:', tableName);
     console.log('   Record ID:', recordId);
-    console.log('   Upload Method:', uploadMethod);
 
-    // STEP 2: Upload PDF to Airtable
     const airtableUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`;
     
+    const updateFields = {
+      'Invoice PDF': [{
+        url: appsScriptResult.fileUrl,
+        filename: appsScriptResult.fileName
+      }],
+      'Drive File ID': appsScriptResult.fileId // Store fileId for later deletion
+    };
+
     const airtableUploadResponse = await fetch(airtableUrl, {
       method: 'PATCH',
       headers: {
@@ -136,9 +185,7 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        fields: {
-          'Invoice PDF': [pdfData]
-        }
+        fields: updateFields
       })
     });
 
@@ -151,6 +198,7 @@ export default async function handler(req, res) {
     const airtableResult = await airtableUploadResponse.json();
     
     console.log('✅ PDF UPLOADED TO AIRTABLE SUCCESSFULLY!');
+    console.log('✅ Drive File ID stored in Airtable for cleanup');
     console.log('==========================================');
 
     // Return success response
@@ -160,7 +208,6 @@ export default async function handler(req, res) {
       fileName: appsScriptResult.fileName,
       recordId: recordId,
       airtableRecordId: airtableResult.id,
-      uploadMethod: uploadMethod,
       fileId: appsScriptResult.fileId,
       fileUrl: appsScriptResult.fileUrl
     });
