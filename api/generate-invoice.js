@@ -74,8 +74,21 @@ export default async function handler(req, res) {
 
     const appsScriptResult = await appsScriptResponse.json();
 
+    // ✅ FIX: Log the full response for debugging
+    console.log('📋 Apps Script Response:', JSON.stringify(appsScriptResult, null, 2));
+
+    // ✅ FIX: Check success first
     if (!appsScriptResult.success) {
-      throw new Error(`Apps Script Error: ${appsScriptResult.error}`);
+      throw new Error(`Apps Script Error: ${appsScriptResult.error || 'Unknown error from Apps Script'}`);
+    }
+
+    // ✅ FIX: Validate pdfBase64 exists before accessing .length
+    if (!appsScriptResult.pdfBase64) {
+      throw new Error('Apps Script did not return PDF data. Response fields: ' + Object.keys(appsScriptResult).join(', '));
+    }
+
+    if (!appsScriptResult.fileName) {
+      throw new Error('Apps Script did not return fileName');
     }
 
     console.log('✅ PDF Generated Successfully');
