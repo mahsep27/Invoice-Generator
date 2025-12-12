@@ -1,9 +1,24 @@
 {
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/**/*.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  },
   "functions": {
     "api/**/*.js": {
       "memory": 2048,
-      "maxDuration": 60
+      "maxDuration": 30
     }
-  },
-  "buildCommand": "npm install"
+  }
 }
